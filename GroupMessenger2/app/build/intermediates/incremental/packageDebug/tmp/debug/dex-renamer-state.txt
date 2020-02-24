@@ -1,0 +1,4 @@
+#Mon Feb 24 10:45:04 EST 2020
+base.0=/home/akash/CSE-586-Group-Messenger-PART-2/GroupMessenger2/app/build/intermediates/dex/debug/mergeDexDebug/out
+path.0=classes.dex
+renamed.0=classes.dex
