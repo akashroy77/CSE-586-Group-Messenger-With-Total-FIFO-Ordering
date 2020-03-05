@@ -1,8 +1,7 @@
 package edu.buffalo.cse.cse486586.groupmessenger2;
 
-import java.io.Serializable;
 
-public class Messenger implements Serializable {
+public class Messenger  {
     int sequenceNumber;
     int sendingPort;
     int receivingPort;

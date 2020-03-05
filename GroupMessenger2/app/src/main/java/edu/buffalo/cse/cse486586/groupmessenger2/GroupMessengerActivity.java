@@ -3,7 +3,6 @@ package edu.buffalo.cse.cse486586.groupmessenger2;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Context;
-import android.media.MediaExtractor;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -15,14 +14,14 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
 
-
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.PriorityQueue;
@@ -31,7 +30,7 @@ import static android.content.ContentValues.TAG;
 
 /**
  * GroupMessengerActivity is the main Activity for the assignment.
- *
+ * import android.os.Bundle;
  * @author stevko
  *
  */
@@ -41,11 +40,11 @@ public class GroupMessengerActivity extends Activity {
     int clientSequenceNumber=0;
     int serverSequenceNumber=0;
     int clientPort=0;
+    Comparator<Messenger> comparator = new PriorityComparator();
     int sequence_number=0;
     String remotePorts[] = new String[]{"11108", "11112", "11116", "11120", "11124"};
-    PriorityQueue<Messenger> messageQueue=new PriorityQueue<Messenger>();
+    PriorityQueue<Messenger> messageQueue=new PriorityQueue<Messenger>(100,comparator);
     HashMap<Integer,Integer> proposedSequenceNumberServerMap=new HashMap<Integer, Integer>();
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -59,7 +58,6 @@ public class GroupMessengerActivity extends Activity {
         String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
         final String myPort = String.valueOf((Integer.parseInt(portStr) * 2));
         clientPort=Integer.parseInt(myPort);
-
         try {
             /*
              * Create a server socket as well as a thread (AsyncTask) that listens on the server
@@ -71,7 +69,6 @@ public class GroupMessengerActivity extends Activity {
              */
             Log.d("ServerSocket","Creating a Server Socket");
             ServerSocket serverSocket = new ServerSocket(SERVER_PORT);
-            proposedSequenceNumberServerMap=helper.fillHashMap(proposedSequenceNumberServerMap,remotePorts);
             new ServerTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
         } catch (IOException e) {
             Log.e(TAG, "Can't create a ServerSocket");
@@ -112,6 +109,7 @@ public class GroupMessengerActivity extends Activity {
 
             }
         });
+
     }
 
     @Override
@@ -120,77 +118,76 @@ public class GroupMessengerActivity extends Activity {
         getMenuInflater().inflate(R.menu.activity_group_messenger, menu);
         return true;
     }
+
     /***
      * ServerTask is an AsyncTask that should handle incoming messages. It is created by
      * ServerTask.executeOnExecutor() call in SimpleMessengerActivity.
      */
 
     private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
+        int sequence_number=0;
         Uri providerUri= Uri.parse("content://edu.buffalo.cse.cse486586.groupmessenger2.provider");
         @Override
         protected Void doInBackground(ServerSocket... sockets) {
-            int receivedPriority=0;
+
+            ServerSocket serverSocket = sockets[0];
+            String[] messageSplits=new String[6];
             try {
                 while (true) {
-                    ServerSocket serverSocket = sockets[0];
                     Socket socket = serverSocket.accept();
-                    Log.d("Server:", "Connection Successful");
-                    //https://stackoverflow.com/questions/34774147/how-to-read-different-object-using-objectinputstream-in-java
-                    ObjectInputStream inputStream = new ObjectInputStream(socket.getInputStream());
-                    ObjectOutputStream outputStream = new ObjectOutputStream(socket.getOutputStream());
-                    Messenger receivedMessage = (Messenger) inputStream.readObject();
-                    Log.d("Server:", "Received Messenger Object");
-                    Log.d("Server:", "Port Number"+receivedMessage.sendingPort);
-                    Log.d("Server:", "Received Message Type"+receivedMessage.messageType);
-                    Log.d("Server:", "Received Messenger Message"+receivedMessage.message);
-                    String message=receivedMessage.message;
-                    publishProgress(receivedMessage.message);
-            /*        if(receivedMessage.messageType.equals("message")) {
-                        Log.d("Server","Sending Sequence Number");
-                        receivedPriority=receivedMessage.sequenceNumber;
-                        Log.d("Server","Received Priority"+receivedPriority);
-                        serverSequenceNumber=helper.calculateMax(proposedSequenceNumberServerMap.get(receivedMessage.sendingPort),receivedPriority);
-                        serverSequenceNumber++;
-                        proposedSequenceNumberServerMap.put(receivedMessage.sendingPort, serverSequenceNumber);
-                        // Sending the Proposed Sequence Number for the corresponding Avd
-                        Messenger sendingMessage = new Messenger(serverSequenceNumber,proposedSequenceNumberServerMap.get(receivedMessage.sendingPort), receivedMessage.receivingPort, false, receivedMessage.message, "proposal");
-                        messageQueue.add(sendingMessage);
-                        Log.d("Server",Integer.toString(messageQueue.size()));
-                        Log.d("Client", "Sequence Number to be proposed" + proposedSequenceNumberServerMap.get(receivedMessage.sendingPort));
-                        outputStream.writeObject(sendingMessage);
+                    Log.d("Server:", "Connection Successfull");
+                    DataInputStream inputStream = new DataInputStream(socket.getInputStream());
+                    String inputString = inputStream.readUTF();
+                    Log.d("Server:", "Received String"+inputString);
+                    messageSplits=inputString.split(":");;
+                    int receivedSequenceNumberFromClient=Integer.parseInt(messageSplits[0]);
+                    int localClientPort=Integer.parseInt(messageSplits[1]);
+                    int localServerPort=Integer.parseInt(messageSplits[2]);
+                    boolean deliveryStatus=messageSplits[3].equals("false")?false:true;
+                    String receivedMessage=messageSplits[4];
+                    String receivedMessageType=messageSplits[5];
+                    if(receivedMessageType.equals("message")) {
+                        if (serverSequenceNumber < receivedSequenceNumberFromClient) {
+                            serverSequenceNumber = receivedSequenceNumberFromClient++;
+                        } else {
+                            serverSequenceNumber=serverSequenceNumber;
+                        }
+                        Messenger serverMessage = new Messenger(serverSequenceNumber, localClientPort, localServerPort, deliveryStatus, receivedMessage, receivedMessageType);
+                        messageQueue.add(serverMessage);
+                        Log.d("Server", "Sending the Proposed Sequence Number");
+                        DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                        outputStream.writeUTF(Integer.toString(serverSequenceNumber));
                         outputStream.flush();
                     }
-                    else if(receivedMessage.messageType.equals("acknowledgement"))
-                    {
-                        Log.d("Server","h1");
-                        receivedMessage.delivered=true;
-                        //https://stackoverflow.com/questions/8129122/how-to-iterate-over-a-priorityqueue
+
+                        Log.d("server","h1");
+                        Messenger serverMessage = new Messenger(serverSequenceNumber, localClientPort, localServerPort, true, receivedMessage, receivedMessageType);
+                        messageQueue.add(serverMessage);
                         Iterator messageIterator=messageQueue.iterator();
-                        Log.d("Server","h2");
                         while (messageIterator.hasNext())
                         {
-                            Log.d("Server","h3");
-                            Messenger topMessage= messageQueue.poll();
                             Messenger curMessage= (Messenger)messageIterator.next();
-                            Log.d("Server","h4");
-                            Log.d("server",Integer.toString(messageQueue.size()));
-                            Log.d("server",topMessage.message);
-                            Log.d("server",Integer.toString(topMessage.sequenceNumber));
-                            if(curMessage.sendingPort==receivedMessage.sendingPort && curMessage.message==receivedMessage.message)
+                            Log.d("iterator",Integer.toString(curMessage.sequenceNumber));
+
+                            Messenger topMessage= messageQueue.poll();
+
+                            if(curMessage.sendingPort==localClientPort && curMessage.message==receivedMessage)
                             {
+                                Log.d("server","h2");
                                 messageQueue.remove(curMessage);
-                                messageQueue.add(receivedMessage);
+                                messageQueue.add(serverMessage);
                             }
                             if(topMessage.delivered)
                             {
-                                Log.d("Server","h4");
-                                publishProgress(receivedMessage.message);
+                                Log.d("server","h3");
+                                publishProgress(topMessage.message);
                                 sequence_number=topMessage.sequenceNumber;
-                            }
+                                Log.d("Server", "Sending the Message to OnProgressUpdate");
 
+                            }
                         }
-                    }*/
-                }
+
+                    }
             }
             catch (Exception ex)
             {
@@ -207,7 +204,6 @@ public class GroupMessengerActivity extends Activity {
              * The following code displays what is received in doInBackground().
              */
             String strReceived = strings[0].trim();
-            Log.d("Server Inside",strReceived);
             TextView remoteTextView = (TextView) findViewById(R.id.textView1);
             remoteTextView.append(strReceived + "\t\n");
             TextView localTextView = (TextView) findViewById(R.id.textView1);
@@ -217,7 +213,7 @@ public class GroupMessengerActivity extends Activity {
             ContentValues keyValueToInsert = new ContentValues();
 
             // inserting <”key-to-insert”, “value-to-insert”>
-            keyValueToInsert.put("key",sequence_number++);
+            keyValueToInsert.put("key",this.sequence_number++);
             keyValueToInsert.put("value",strReceived);
 
             Uri newUri = getContentResolver().insert(
@@ -240,87 +236,75 @@ public class GroupMessengerActivity extends Activity {
 
         @Override
         protected Void doInBackground(String... msgs) {
-            Socket socket=null;
             int maxPriority=0;
-            int i=0;
+            Socket[] sockets=new Socket[5];
             String msgToSend = msgs[0];
-         //   Socket[] sockets=new Socket[5];
-            // First Time multi casting the message to all the Clients and waiting for their reply
-            // on the proposed sequence number
             try {
-                for(String port:remotePorts) {
-                    socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
-                            Integer.parseInt(port));
-              //      sockets[i]=socket;
-                    int sendingPort = Integer.parseInt(port);
-                    int receivingPort=clientPort;
-                    // Every time a we click on a send button of an avd the client sequence number will increase
-                    Messenger sendingMessage = new Messenger(clientSequenceNumber++,sendingPort, receivingPort,false, msgToSend,"message");
-                    //https://stackoverflow.com/questions/27736175/how-to-send-receive-objects-using-sockets-in-java
-                    ObjectOutputStream outputStream = new ObjectOutputStream(socket.getOutputStream());
-                    Log.d("Client","The Message is sent to the Port Number"+sendingPort);
-                    Log.d("Client", "Message to be Sent" + sendingMessage.message);
-                    outputStream.writeObject(sendingMessage);
+                // Every time the send button gets clicked the client sequence number will increase
+                // For example for the first message it will be 1
+                // for second message from the same client it will be 2 (1+1)
+                clientSequenceNumber++;
+                for(int i=0;i<remotePorts.length;i++) {
+                   Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
+                            Integer.parseInt(remotePorts[i]));
+                   sockets[i]=socket;
+
+                    // Creating the Final string to multi cast that will contain all the details of the message
+                    // todo comments
+                    String completeMessage=clientSequenceNumber+":"+clientPort+":"+Integer.parseInt(remotePorts[i])+":"+"false"+":"+msgToSend+":"+"message";
+                    DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                    Log.d("Client", "Message to be Sent" +completeMessage);
+                    outputStream.writeUTF(completeMessage);
                     outputStream.flush();
                     Log.d("Client", "Message Sent");
-                    // https://stackoverflow.com/questions/4969760/setting-a-timeout-for-socket-operations
-                    // This will make sure that the avd will wait for the replies from all the five avd
-        //            //socket.setSoTimeout(2000);
-                    //https://stackoverflow.com/questions/27736175/how-to-send-receive-objects-using-sockets-in-java
-                    ObjectInputStream inputStream = new ObjectInputStream(socket.getInputStream());
-                    //https://stackoverflow.com/questions/34774147/how-to-read-different-object-using-objectinputstream-in-java
-                    Messenger receivedMessageObject = (Messenger) inputStream.readObject();
-                    int proposedSequenceNumberFromServer=receivedMessageObject.sequenceNumber;
-                    Log.d("Client", "Receiving the proposed Sequence Number"+proposedSequenceNumberFromServer);
-                    maxPriority=helper.calculateMax(maxPriority,proposedSequenceNumberFromServer);
+                    Log.d("Server", "Receiving Priority from Server");
+                    socket.setSoTimeout(500);
+                    DataInputStream inputStream = new DataInputStream(socket.getInputStream());
+                    Integer serverProposedPriority =Integer.parseInt(inputStream.readUTF());
+                    maxPriority=helper.calculateMax(maxPriority,serverProposedPriority);
                 }
 
-            }
-            catch (UnknownHostException e) {
+            } catch (UnknownHostException e) {
                 Log.e(TAG, "ClientTask UnknownHostException");
+            } catch (IOException e) {
+                Log.e(TAG, "ClientTask socket IOException");
             }
-            catch (IOException e) {
-                Log.e(TAG, "ClientTask socket IOException"+e.getMessage());
-                e.printStackTrace();
+            try {
+                for (int i=0;i<remotePorts.length;i++) {
+                    // Creating the Final string to multi cast that will contain all the details of the message
+                    // todo comments
+                    Log.d("Client","final message");
+                    String completeMessage = maxPriority + ":" + clientPort + ":" + Integer.parseInt(remotePorts[i]) + ":" + "false" + ":" + msgToSend + ":" + "acknowledgement";
+                    DataOutputStream outputStream = new DataOutputStream(sockets[i].getOutputStream());
+                    Log.d("Client", "Message to be Sent final" + completeMessage);
+                    outputStream.writeUTF(completeMessage);
+                    outputStream.flush();
+                    Log.d("Client", "Message Sent");
+                    DataInputStream inputStream = new DataInputStream(sockets[i].getInputStream());
+                    String dummySting=inputStream.readUTF();
+                    sockets[i].close();
+                }
+            }catch (UnknownHostException e) {
+                Log.e(TAG, "ClientTask UnknownHostException");
+            } catch (IOException e) {
+                Log.e(TAG, "ClientTask socket IOException");
             }
-            catch (Exception e)
-            {
-                Log.e(TAG,e.getMessage());
-            }
-            /*
-            // Once a Client got all the sequence number from the servers it calculates the maximum
-            // sequence number and then multi casts the message
-            // This part contains the code for multi casting the message with final sequence number
 
-                for (String port : remotePorts) {
-                    try {
-                        int receivingPort = Integer.parseInt(port);
-                        Messenger sendingMessage = new Messenger(maxPriority, clientPort, receivingPort, true, msgToSend, "acknowledgement");
-                        //https://stackoverflow.com/questions/27736175/how-to-send-receive-objects-using-sockets-in-java
-                        ObjectOutputStream outputStream = new ObjectOutputStream(socket.getOutputStream());
-                        Log.d("Client", "Message to be Sent" + sendingMessage.message);
-                        outputStream.writeObject(sendingMessage);
-                        outputStream.flush();
-                        Log.d("Client", "Message Sent Final");
-              //          Log.d("Server", "Creating a dummy object stream so handshake will be complete and we can close the socket");
-                        //https://stackoverflow.com/questions/27736175/how-to-send-receive-objects-using-sockets-in-java
-                        //ObjectInputStream inputStream = new ObjectInputStream(socket.getInputStream());
-                        //https://stackoverflow.com/questions/34774147/how-to-read-different-object-using-objectinputstream-in-java
-                  //      Messenger dummyMessage = (Messenger) inputStream.readObject();
-                     //   sockets[i].close();
-
-                    } catch (UnknownHostException e) {
-                        Log.e(TAG, "ClientTask UnknownHostException");
-                    } catch (IOException e) {
-                        Log.e(TAG, "ClientTask socket IOException" + e.getMessage());
-                        e.printStackTrace();
-                    } catch (Exception e) {
-                        Log.e(TAG, e.getMessage());
-                    }
-                }*/
             return null;
         }
     }
 }
-
-
+class PriorityComparator implements Comparator<Messenger>
+{
+    @Override
+    public int compare(Messenger x, Messenger y)
+    {
+        if (x.sequenceNumber<y.sequenceNumber){
+            return -1;
+        }
+        if (x.sequenceNumber>y.sequenceNumber){
+            return 1;
+        }
+        return 0;
+    }
+}
