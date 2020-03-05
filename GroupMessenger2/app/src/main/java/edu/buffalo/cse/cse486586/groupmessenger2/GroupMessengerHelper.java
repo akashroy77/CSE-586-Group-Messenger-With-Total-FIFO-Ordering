@@ -15,6 +15,6 @@ public class GroupMessengerHelper {
 
     public int calculateMax(int firstNumber,int secondNumber)
     {
-        return (firstNumber>secondNumber)?firstNumber:secondNumber;
+        return (firstNumber>=secondNumber)?firstNumber:secondNumber;
     }
 }
