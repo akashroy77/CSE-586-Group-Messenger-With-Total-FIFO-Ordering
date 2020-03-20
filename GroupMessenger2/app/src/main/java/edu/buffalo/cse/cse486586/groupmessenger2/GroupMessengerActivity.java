@@ -20,7 +20,6 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -37,12 +36,8 @@ import static android.content.ContentValues.TAG;
  */
 public class GroupMessengerActivity extends Activity {
     static final int SERVER_PORT=10000;
-    // This is the sequence number for sender to manage FIFO along with TOTAL ordering
     int clientSequenceNumber=0;
-    // This is the sequence number that will be proposed by server
     int serverSequenceNumber=0;
-    // Senders Port which is the port number that this AVD listens on
-    // Calculated via TelephonyManager
     int clientPort=0;
     String remotePorts[] = new String[]{"11108", "11112", "11116", "11120", "11124"};
     //https://stackoverflow.com/questions/683041/how-do-i-use-a-priorityqueue
@@ -62,7 +57,6 @@ public class GroupMessengerActivity extends Activity {
         String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
         final String myPort = String.valueOf((Integer.parseInt(portStr) * 2));
         clientPort=Integer.parseInt(myPort);
-        Log.d("Message Sender Port: ",Integer.toString(clientPort));
         try {
             /*
              * Create a server socket as well as a thread (AsyncTask) that listens on the server
@@ -110,8 +104,8 @@ public class GroupMessengerActivity extends Activity {
                 TextView localTextView = (TextView) findViewById(R.id.textView1);
                 localTextView.append("\t" + msg); // This is one way to display a string.
 
-                // Call the Client Task onClicking the Send Button
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg);
+
             }
         });
 
@@ -130,76 +124,63 @@ public class GroupMessengerActivity extends Activity {
      */
 
     private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
-        // Message Sequence Number for DB
         int sequence_number=0;
         Uri providerUri= Uri.parse("content://edu.buffalo.cse.cse486586.groupmessenger2.provider");
         @Override
         protected Void doInBackground(ServerSocket... sockets) {
             ServerSocket serverSocket = sockets[0];
             String[] messageSplits;
-            // Client Port: Sending AVD's Port Number
             int localClientPort=0;
-            // Server Port: Receiving AVD's Port Number
-            int localServerPort;
+            int localServerPort=0;
+            Log.e(TAG,"IN SERVER");
             try {
                 while (true) {
                     try {
                         Socket socket = serverSocket.accept();
                         Log.d("Server:", "Connection Successful");
                         DataInputStream inputStream = new DataInputStream(socket.getInputStream());
-                        DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
-                        // Received Message From Client
                         String inputString = inputStream.readUTF();
                         Log.d("Server:", "Received String" + inputString);
                         messageSplits = inputString.split(":");
-                        // Initial Priority received From Client
                         int receivedSequenceNumberFromClient = Integer.parseInt(messageSplits[0]);
-                        // Client Port: Sending AVD's Port Number
                         localClientPort = Integer.parseInt(messageSplits[1]);
-                        // Server Port: Receiving AVD's Port Number
                         localServerPort = Integer.parseInt(messageSplits[2]);
-                        // Message Status: Deliverable or Not
                         boolean deliveryStatus = messageSplits[3].equals("false") ? false : true;
-                        // Actual Message sent from the AVD
                         String receivedMessage = messageSplits[4];
-                        // Message Type : Initial or Final
                         String receivedMessageType = messageSplits[5];
                         if (receivedMessageType.equals("message")) {
                             int tempSequenceNumber=serverSequenceNumber;
                             // server sequence number=max(own sequence number,client sent sequence number)
                             serverSequenceNumber=helper.calculateMax(receivedSequenceNumberFromClient,serverSequenceNumber);
-                            // Message Object for the received message
+                            // Sending proposed sequence Number to client
                             Messenger serverMessage = new Messenger(serverSequenceNumber, localClientPort, localServerPort, deliveryStatus, receivedMessage, receivedMessageType);
                             serverSequenceNumber=(tempSequenceNumber==serverSequenceNumber)?serverSequenceNumber++:receivedSequenceNumberFromClient++;
                             // adding to the priority queue
                             messageQueue.add(serverMessage);
-                            // Sending proposed sequence Number to client
+                            DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
                             outputStream.writeUTF(Integer.toString(serverSequenceNumber));
                             outputStream.flush();
                             Log.d("Server", "Sending the Proposed Sequence Number");
                         }
-                        // Message with Final Priority from Client
+
                         String finalMessage = inputStream.readUTF();
                         String[] finalMessageSplits = finalMessage.split(":");
-                        // Setting Deliverable as TRUE for the final Message
-                        Messenger finalMessageObject = new Messenger(Integer.parseInt(finalMessageSplits[0]), Integer.parseInt(finalMessageSplits[1]), Integer.parseInt(finalMessageSplits[2]), true, finalMessageSplits[4], finalMessageSplits[5]);
+                        Messenger fMessage = new Messenger(Integer.parseInt(finalMessageSplits[0]), Integer.parseInt(finalMessageSplits[1]), Integer.parseInt(finalMessageSplits[2]), true, finalMessageSplits[4], finalMessageSplits[5]);
                         Iterator messageIterator = messageQueue.iterator();
                         while (messageIterator.hasNext()) {
                             Messenger curMessage = (Messenger) messageIterator.next();
                             Log.d("iterator", Integer.toString(curMessage.sequenceNumber));
-                            // Updating the message priority in the priority queue
+
                             if (curMessage.sendingPort == Integer.parseInt(finalMessageSplits[1]) && curMessage.message.equals(finalMessageSplits[4])) {
                                 Log.d("server", "h2");
                                 messageQueue.remove(curMessage);
-                                messageQueue.add(finalMessageObject);
+                                messageQueue.add(fMessage);
                             }
                         }
                         Iterator messageIterator1 = messageQueue.iterator();
                         while (messageIterator1.hasNext()) {
                             Messenger curMessage = (Messenger) messageIterator1.next();
                             Log.d("iterator", Integer.toString(curMessage.sequenceNumber));
-                            // If top of the queue message is deliverable send it to publish progress
-                            // and remove the message from the queue
                             if (curMessage.delivered) {
                                 Log.d("Server", curMessage.message);
                                 Log.d("server", "h3");
@@ -213,7 +194,7 @@ public class GroupMessengerActivity extends Activity {
                         Log.e("Server_msg", e.toString());
                         Log.d("Server","Failed AVD");
                         removePortMessage(localClientPort);
-                       // continue;
+                        continue;
                     }
                 }
             }
@@ -233,6 +214,7 @@ public class GroupMessengerActivity extends Activity {
                     messageQueue.remove(curMessage);
                 }
             }
+
         }
 
         protected void onProgressUpdate(String...strings) {
@@ -245,7 +227,6 @@ public class GroupMessengerActivity extends Activity {
             TextView localTextView = (TextView) findViewById(R.id.textView1);
             localTextView.append("\n");
 
-            //https://docs.google.com/document/d/1fvmg29y0KFEXRFJg5wzw8Gchj1ukYuQRuhw0R1H3pi0/edit
             //Storing Value to the Database Using Content Provider
             ContentValues keyValueToInsert = new ContentValues();
 
@@ -270,20 +251,17 @@ public class GroupMessengerActivity extends Activity {
      *
      */
     private class ClientTask extends AsyncTask<String, Void, Void> {
+
         @Override
         protected Void doInBackground(String... msgs) {
             int maxPriority=0;
-            // hash map to map the socket with a index number
-            // so that a same socket which is multi casting the initial message
-            // will multi cast the final message as well
             HashMap<Integer,Socket> socketMap=new HashMap<Integer,Socket>();
             String msgToSend = msgs[0];
             try {
                 // Every time the send button gets clicked the client sequence number will increase
                 // For example for the first message it will be 1
-                // for second message from the same client it will be 2 (1+1)
+                // for the next message from a client it will be 2 (1+1)
                 clientSequenceNumber++;
-                //socket index number
                 int socketCounter=0;
                 for(String ports:remotePorts) {
                     try {
@@ -291,9 +269,9 @@ public class GroupMessengerActivity extends Activity {
                                 Integer.parseInt(ports));
                         socketMap.put(socketCounter, socket);
                         socketCounter++;
-                        // Creating the Final string to multi cast that will contain all the details of the message
-                        // todo comments
-                        String completeMessage = clientSequenceNumber + ":" + clientPort + ":" + Integer.parseInt(ports) + ":" + "false" + ":" + msgToSend + ":" + "message";
+                        // Sending the Message to Server
+                        // Along with its local priority,sender's port,receiver's port,delivery status and type
+                        String completeMessage = clientSequenceNumber+ ":" + clientPort + ":" + Integer.parseInt(ports) + ":" + "false" + ":" + msgToSend + ":" + "message";
                         DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
                         DataInputStream inputStream = new DataInputStream(socket.getInputStream());
                         Log.d("Client", "Message to be Sent" + completeMessage);
@@ -309,7 +287,7 @@ public class GroupMessengerActivity extends Activity {
                     }
                     catch (Exception e)
                     {
-                        Log.d("Client",e.getMessage());
+                        Log.d("Client","Akash");
                     }
                 }
 
@@ -320,9 +298,10 @@ public class GroupMessengerActivity extends Activity {
                 int socketCounter = 0;
                 for (String ports : remotePorts) {
                     try {
-                        // Creating the Final string to multi cast that will contain all the details of the message
-                        // todo comments
+                        //Sending the message with its final priority
                         Log.d("Client", "final message");
+                        //Mapping the socket
+                        //so the sender of the multi cast will send the final message
                         Socket finalSocket = socketMap.get(socketCounter);
                         socketCounter++;
                         String completeMessage = maxPriority + ":" + clientPort + ":" + Integer.parseInt(ports) + ":" + "false" + ":" + msgToSend + ":" + "acknowledgement";
@@ -333,17 +312,14 @@ public class GroupMessengerActivity extends Activity {
                         Log.e("Client", finalSocket.toString());
                         Log.d("Client", "Message Sent");
                         finalSocket.close();
-                    }
-                    catch (SocketTimeoutException e) {
-                        Log.e("Client ex",e.getMessage());
+                    } catch (Exception ex) {
+                        Log.d("Client",ex.getMessage());
                     }
                 }
-            }
-            catch (UnknownHostException ex) {
+            }catch (Exception e) {
                 Log.e(TAG, "ClientTask UnknownHostException");
-            } catch (IOException e) {
-                Log.e(TAG, "ClientTask socket IOException");
             }
+
             return null;
         }
     }
